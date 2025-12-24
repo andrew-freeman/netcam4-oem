@@ -50,6 +50,9 @@
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <arpa/inet.h>
+#include <limits.h>
+#include <stdbool.h>
+#include <errno.h>
 #include <signal.h>
 #include <pthread.h>
 
@@ -163,6 +166,7 @@ int cam4_script_processing(cam4_rd_t* cam4_rd);
 /* local func declare */
 static int write_separate(cam4_rd_t *cam4_rd);
 static int cam4_mcast(cam4_rd_t *cam4_rd);
+static int save_local_frame(cam4_rd_t *cam4_rd, const uint8_t *src, size_t size);
 
 #ifdef CAM4_PS_LIB
 cam4_ps_cb_f cam4_ps_cb = NULL;
@@ -193,6 +197,8 @@ static void show_the_banner(void)
 		    "\t-f				output file for RAW frames\n"
 		    "\t-n				number of RAW frames to process\n"
 		    "\t-s				save each frame in file (raw.001 raw.002). Use only with -n flag\n"
+		    "\t-R <N>			save first N RAW frames locally for integrity checks\n"
+		    "\t-O <prefix>		prefix for locally saved RAW frames (default: rx_frame)\n"
 		    "\t-g				just start/stop stream\n"
 		    "\t\t 1				start\n"
 		    "\t\t 2				stop\n"
@@ -1868,6 +1874,12 @@ static void* cam4_rd_process_real(void *priv)
 
         cam4_script_processing(cam4_rd);
 
+		size_t frame_bytes = cam4_rd->FH.fsize & 0x0fffffff;
+		if (save_local_frame(cam4_rd, cam4_rd->img, frame_bytes) != 0) {
+			no_sig_exit = 0;
+			continue;
+		}
+
 		if (cam4_rd->dumpraw_time.tv_sec != 0 && (cam4_rd->dumpraw_time.tv_sec < tv.tv_sec || (cam4_rd->dumpraw_time.tv_sec == tv.tv_sec && cam4_rd->dumpraw_time.tv_usec < tv.tv_usec))) {
 			cam4_rd->dumpraw_time.tv_sec = 0;
 			cam4_dump_raw_frame(cam4_rd, cam4_rd->img, cam4_rd->FH.fsize & 0xfffffff);
@@ -2053,6 +2065,41 @@ static int write_separate(cam4_rd_t *cam4_rd)
     }
 
     return 0;
+}
+
+static int save_local_frame(cam4_rd_t *cam4_rd, const uint8_t *src, size_t size)
+{
+	if (!cam4_rd->save_frames || cam4_rd->save_done) {
+		return 0;
+	}
+
+	char path[PATH_MAX];
+	size_t max_prefix = (sizeof(path) > 16) ? sizeof(path) - 11 : sizeof(path) - 1;
+	snprintf(path, sizeof(path), "%.*s_%05u.raw", (int)max_prefix, cam4_rd->save_prefix, cam4_rd->saved_frames + 1);
+
+	int fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0660);
+	if (fd < 0) {
+		ETRACE("[err] cannot open file [%s]. errno ", path);
+		return -errno;
+	}
+
+	ssize_t written = write(fd, src, size);
+	close(fd);
+	if (written != (ssize_t)size) {
+		ETRACEP("[%s]:%d [err] cannot write data. errno:%d size:%zu",
+			__func__, __LINE__, errno, size);
+		return -errno;
+	}
+
+	cam4_rd->saved_frames++;
+	if (cam4_rd->saved_frames >= cam4_rd->save_frames) {
+		TRACE(0, "[INFO] Saved %u/%u RAW frames to %s_*.raw\n",
+		      cam4_rd->saved_frames, cam4_rd->save_frames, cam4_rd->save_prefix);
+		cam4_rd->save_done = true;
+		no_sig_exit = 0;
+	}
+
+	return 0;
 }
 
 void* cam4_rd_dump_buf(void *priv)
@@ -3356,6 +3403,11 @@ int cam4_ps_main(int argc, char **argv)
 
 		.clear_buff		= 0,
 		.disable_mcast		= 0,
+
+		.save_frames		= 0,
+		.saved_frames		= 0,
+		.save_prefix		= "rx_frame",
+		.save_done		= false,
 	};
 
 	default_debayer_api.debayerRGB_func[0] = debayerRGB_fast_mode0;
@@ -3372,7 +3424,7 @@ int cam4_ps_main(int argc, char **argv)
 
 	/* FIXME - add bayer phase */
 	/* parse parameters */
-	while ((i = getopt(argc, argv, "ZC:bD:d:f:g:hm:n:sv:zMp:q")) != -1) {
+	while ((i = getopt(argc, argv, "ZC:bD:d:f:g:hm:n:sv:zMp:qR:O:")) != -1) {
 		TRACE(3, "mode %c\n", i);
 
 		switch (i) {
@@ -3406,6 +3458,15 @@ int cam4_ps_main(int argc, char **argv)
 			/* single file */
 			cam4_rd.start_mode |= s_flag ;
 			cam4_rd.write_cb = &write_separate;
+			break;
+
+		    case 'R':
+			cam4_rd.save_frames = strtoul(optarg, NULL, 0);
+			break;
+
+		    case 'O':
+			strncpy(cam4_rd.save_prefix, optarg, sizeof(cam4_rd.save_prefix) - 1);
+			cam4_rd.save_prefix[sizeof(cam4_rd.save_prefix) - 1] = '\0';
 			break;
 
 		    case 'f':
@@ -3700,4 +3761,3 @@ void cam4_ps_set_cb(void *func)
 	cam4_ps_cb = func;
 }
 #endif /* CAM4_PS_LIB */
-
