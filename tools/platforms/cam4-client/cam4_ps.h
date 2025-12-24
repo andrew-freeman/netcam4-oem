@@ -128,6 +128,10 @@ typedef struct cam4_rd_s {
 	uint8_t				disable_mcast;
 	uint32_t			ifs_port;
 	struct	ip			*iph;
+	uint16_t			udp_port;
+	uint8_t				enable_udp;
+	char				output_dir[256];
+	uint8_t				output_dir_ready;
 
 	// for EMVA tests define correct path
 	char 				path[256];

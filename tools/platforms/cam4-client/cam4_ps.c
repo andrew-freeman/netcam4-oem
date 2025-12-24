@@ -49,6 +49,7 @@
 #include <string.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
+#include <netinet/udp.h>
 #include <arpa/inet.h>
 #include <signal.h>
 #include <pthread.h>
@@ -1997,6 +1998,26 @@ static void *cam4_rd_process(void *priv)
 	return NULL;
 }
 
+static int ensure_output_dir(cam4_rd_t *cam4_rd)
+{
+	if (cam4_rd->output_dir_ready) {
+		return 0;
+	}
+	if (!cam4_rd->output_dir[0]) {
+		time_t now = time(NULL);
+		struct tm tm_now;
+		localtime_r(&now, &tm_now);
+		strftime(cam4_rd->output_dir, sizeof(cam4_rd->output_dir),
+			 "frames_%Y%m%d_%H%M%S", &tm_now);
+	}
+	if (mkdir(cam4_rd->output_dir, 0770) != 0 && errno != EEXIST) {
+		ETRACE("[err] cannot create output dir %s. errno ", cam4_rd->output_dir);
+		return -1;
+	}
+	cam4_rd->output_dir_ready = 1;
+	return 0;
+}
+
 static int write_frame(cam4_rd_t *cam4_rd)
 {
     int		res;
@@ -2038,7 +2059,12 @@ static int write_separate(cam4_rd_t *cam4_rd)
     char	frame_f[255] = {};
     int		res;
 
-    sprintf(frame_f, "frame_%05d.raw", cam4_rd->frame_idx) ;
+    if (ensure_output_dir(cam4_rd) != 0) {
+	return -1;
+    }
+
+    snprintf(frame_f, sizeof(frame_f), "%s/frame_%05d.raw",
+	     cam4_rd->output_dir, cam4_rd->frame_idx);
 
     cam4_rd->fd = open(frame_f, O_CREAT | O_WRONLY, 0660);
     if(cam4_rd->fd < 0) {
@@ -3356,6 +3382,10 @@ int cam4_ps_main(int argc, char **argv)
 
 		.clear_buff		= 0,
 		.disable_mcast		= 0,
+		.udp_port		= 10000,
+		.enable_udp		= 1,
+		.output_dir		= {0},
+		.output_dir_ready	= 0,
 	};
 
 	default_debayer_api.debayerRGB_func[0] = debayerRGB_fast_mode0;
@@ -3620,11 +3650,8 @@ int cam4_ps_main(int argc, char **argv)
 				h->tp_len
 			);
 */
-			if(
-			    (iph->ip_id == htons (54321)) &&
-			    (iph->ip_p  == 253)
-			) {
-				/* check for the protocol type */
+			if ((iph->ip_p  == 253) && (iph->ip_id == htons(54321))) {
+				/* legacy raw protocol */
 				cam4_rd.iph = iph;
 				if(
 				    (!cam4_rd.disable_mcast) ||
@@ -3632,6 +3659,15 @@ int cam4_ps_main(int argc, char **argv)
 				    (iph->ip_src.s_addr == cam4_rd.cam4_cl.conn_ipv4.ip)
 				) {
 					parse_packet(data, h, &cam4_rd);
+				}
+			} else if (cam4_rd.enable_udp && iph->ip_p == IPPROTO_UDP) {
+				struct udphdr *uh = (struct udphdr *)data;
+				uint16_t dst_port = ntohs(uh->dest);
+				uint16_t src_port = ntohs(uh->source);
+				if (dst_port == cam4_rd.udp_port || src_port == cam4_rd.udp_port) {
+					uint8_t *udp_payload = data + sizeof(struct udphdr);
+					cam4_rd.iph = iph;
+					parse_packet(udp_payload, h, &cam4_rd);
 				}
 			}
 			/* tell the kernel this packet is done with */
@@ -3700,4 +3736,3 @@ void cam4_ps_set_cb(void *func)
 	cam4_ps_cb = func;
 }
 #endif /* CAM4_PS_LIB */
-
