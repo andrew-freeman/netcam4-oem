@@ -44,12 +44,22 @@
 
 
 
+/* X11/Xv was used originally; add a feature-detecting guard so the code still
+ * builds on systems without legacy X development headers. */
+#if defined(__has_include)
+#  if __has_include(<X11/Xlib.h>) && __has_include(<X11/extensions/Xvlib.h>) && __has_include(<X11/extensions/XShm.h>)
+#    define CAM4_HAS_X11 1
+#  endif
+#endif
+
+#ifdef CAM4_HAS_X11
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
 #include <X11/extensions/Xv.h>
 #include <X11/extensions/Xvlib.h>
 #include <X11/extensions/XShm.h>
+#endif
 
 
 #include <sys/poll.h>
@@ -69,6 +79,24 @@
 #include <ui/osd-yuyv.h>
 
 #include "shared_objects.h"
+
+#ifndef CAM4_HAS_X11
+/* ------------------------------------------------------------------------- */
+/* Minimal headless fallback
+ *
+ * The original viewer relied on X11/Xv overlays. On modern distributions
+ * without those headers, we keep the build working by providing a stub that
+ * simply instructs the user to install the optional viewer dependencies or
+ * run the non-visual path. This prevents hard build failures while keeping
+ * the rest of the toolchain usable. */
+int main(void)
+{
+	TRACE(0, "cam4_ps_Xclient built without X11/Xv headers; install libx11-dev, "
+	           "libxext-dev, and libxv-dev to enable on-screen visualization.\n");
+	return 0;
+}
+
+#else /* CAM4_HAS_X11 */
 
 static char* trace_prefix = "cam4_ps_Xclient: ";
 FILE* I;
@@ -1145,3 +1173,5 @@ int main(int argc, char** argv) {
 	read_xv_buf(common);
 	return 0;
 }
+
+#endif /* CAM4_HAS_X11 */
