@@ -83,13 +83,14 @@ static si_code_t sc_SIGBUS[] = {
   { 0,			NULL}
 };
 
-#ifndef __CYGWIN__
+#if !defined(__CYGWIN__) && defined(TRAP_BRKPT) && defined(TRAP_TRACE)
 static si_code_t sc_SIGTRAP[] = {
   /* SIGTRAP */
   { TRAP_BRKPT,		"process breakpoint"},
   { TRAP_TRACE,		"process trace trap"},
   { 0,			NULL}
 };
+#define HAVE_SIGTRAP_CODES
 #endif
 static si_code_t sc_SIGCHLD[] = {
   /* SIGCHLD */
@@ -133,7 +134,7 @@ static si_sigs_t sc_tbl[] = {
   { SIGFPE, 		sc_SIGFPE},
   { SIGSEGV, 		sc_SIGSEGV},
   { SIGBUS, 		sc_SIGBUS},
-#ifndef __CYGWIN__
+#ifdef HAVE_SIGTRAP_CODES
   { SIGTRAP, 		sc_SIGTRAP},
 #endif
   { SIGCHLD, 		sc_SIGCHLD},
