@@ -27,6 +27,25 @@ tools/platforms/cam4-tools:
 		Utility to simple analize and dump RAW VIDEO from wireshark/tcpdump capture
 		files in .tcpdump format
 
+# RAW ABI test suite (CMake)
+The `tools/rawabi` folder contains lightweight RAW-over-UDP test utilities built
+on top of `include/abi/ip-video-raw.h`. Build with CMake:
+
+```
+cmake -S . -B build -DBUILD_RAWABI_TESTS=ON
+cmake --build build
+ctest --test-dir build
+```
+
+Resulting binaries live in `build/tools/rawabi/`:
+
+* `rawabi_sender` — synthetic frame generator (color bars, ramp, checker/slanted edge, moving box) and optional RAW file replay with loss/reorder/duplicate injection.
+* `rawabi_receiver` — fragment reassembly, ISP-lite preview (mono/green/half-res/bilinear), stats overlay, optional recording.
+* `rawabi_record` — headless capture to `.raw` files.
+* `rawabi_playback` — replay `.raw` sequences back into the receiver.
+
+See `tools/rawabi/README.md` for usage examples.
+
 #Synthetic RAW sender
 tools/raw-dummy-tx/raw_dummy_tx
 
