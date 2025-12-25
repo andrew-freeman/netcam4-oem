@@ -9,8 +9,10 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -48,6 +50,10 @@ typedef struct {
 	uint32_t           flow_id;
 	uint32_t           fragment_payload;
 	uint32_t           fps;
+	uint32_t           save_frames;
+	uint32_t           saved_frames;
+	char               save_prefix[PATH_MAX];
+	bool               auto_start;
 
 	volatile int       run;
 	volatile int       stop;
@@ -109,6 +115,34 @@ static void synthetic_frame(tx_ctx_t *ctx, uint16_t *buf, uint32_t fseq)
 	for (uint32_t i = 0; i < 32 && i < w; ++i) {
 		buf[i] = (uint16_t)((fseq & 0x0fffu) << 4);
 	}
+}
+
+static int save_frame(tx_ctx_t *ctx, const uint16_t *buf, size_t frame_bytes)
+{
+	if (!ctx->save_frames || ctx->saved_frames >= ctx->save_frames) {
+		return 0;
+	}
+
+	char path[PATH_MAX];
+	size_t max_prefix = (sizeof(path) > 16) ? sizeof(path) - 11 : sizeof(path) - 1;
+	snprintf(path, sizeof(path), "%.*s_%05u.raw", (int)max_prefix, ctx->save_prefix, ctx->saved_frames + 1);
+
+	FILE *fp = fopen(path, "wb");
+	if (!fp) {
+		perror("save frame fopen");
+		return -1;
+	}
+
+	size_t written = fwrite(buf, 1, frame_bytes, fp);
+	fclose(fp);
+	if (written != frame_bytes) {
+		fprintf(stderr, "Short write when saving frame (%zu of %zu)\n", written, frame_bytes);
+		return -1;
+	}
+
+	ctx->saved_frames++;
+
+	return 0;
 }
 
 static int send_frame(tx_ctx_t *ctx, uint16_t *frame_buf)
@@ -204,8 +238,11 @@ static void usage(const char *prog)
 	fprintf(stderr,
 	        "Usage: %s -d <dst_ip> [-p <dst_port>] [-c <ctrl_port>] "
 	        "[-w <width>] [-h <height>] [-f <fps>] [-m <fragment bytes>] "
-	        "[-l <flow_id>] [-t pattern]\n"
-	        "Patterns: 0=gradient (default), 1=flat, 2=checker, 3=noise\n",
+	        "[-l <flow_id>] [-t pattern] [-N <frames>] [-O <prefix>] [-A]\n"
+	        "Patterns: 0=gradient (default), 1=flat, 2=checker, 3=noise\n"
+	        "-N save the first N frames locally (raw files)\n"
+	        "-O prefix for locally saved frames (default: tx_frame)\n"
+	        "-A start streaming immediately without control packet\n",
 	        prog);
 }
 
@@ -226,6 +263,10 @@ int main(int argc, char **argv)
 		.flow_id          = DEFAULT_FLOW,
 		.fragment_payload = MTU_SAFE_PAYLOAD,
 		.fps              = 30,
+		.save_frames      = 0,
+		.saved_frames     = 0,
+		.save_prefix      = "tx_frame",
+		.auto_start       = false,
 		.run              = 0,
 		.stop             = 0,
 		.fseq             = 0,
@@ -237,7 +278,7 @@ int main(int argc, char **argv)
 	uint16_t ctrl_port = DEFAULT_CTRL;
 	uint16_t data_port = DEFAULT_PORT;
 	int opt;
-	while ((opt = getopt(argc, argv, "d:p:c:w:h:f:m:l:t:")) != -1) {
+	while ((opt = getopt(argc, argv, "d:p:c:w:h:f:m:l:t:N:O:A")) != -1) {
 		switch (opt) {
 		case 'd':
 			dst_ip = optarg;
@@ -272,6 +313,16 @@ int main(int argc, char **argv)
 			ctx.pattern = (typeof(ctx.pattern))p;
 			break;
 		}
+		case 'N':
+			ctx.save_frames = (uint32_t)atoi(optarg);
+			break;
+		case 'O':
+			strncpy(ctx.save_prefix, optarg, sizeof(ctx.save_prefix) - 1);
+			ctx.save_prefix[sizeof(ctx.save_prefix) - 1] = '\0';
+			break;
+		case 'A':
+			ctx.auto_start = true;
+			break;
 		default:
 			usage(argv[0]);
 			return 1;
@@ -321,6 +372,10 @@ int main(int argc, char **argv)
 	ctx.ts_origin_ns = monotonic_us() * 1000ull;
 	pthread_create(&ctrl, NULL, ctrl_thread, &ctx);
 
+	if (ctx.auto_start) {
+		ctx.run = 1;
+	}
+
 	signal(SIGINT, handle_sig);
 	signal(SIGTERM, handle_sig);
 
@@ -335,6 +390,9 @@ int main(int argc, char **argv)
 	while (!ctx.stop) {
 		if (ctx.run) {
 			synthetic_frame(&ctx, frame, ctx.fseq);
+			if (save_frame(&ctx, frame, frame_bytes) != 0) {
+				break;
+			}
 			if (send_frame(&ctx, frame) != 0) {
 				break;
 			}

@@ -31,6 +31,7 @@
 #include <abi/ip-video-raw.h>
 #include "cam4-cmd-cl.h"
 #include "shared_objects.h"
+#include <stdbool.h>
 
 #include "debayer_api.h"
 #include "cam4_ps-lut.h"
@@ -53,6 +54,10 @@ typedef struct cam4_rd_s {
 	uint16_t			frame_num;
 	uint16_t			frame_idx;
 	write_cb_f			*write_cb;
+	uint32_t			save_frames;
+	uint32_t			saved_frames;
+	char				save_prefix[256];
+	bool				save_done;
 	uint8_t				*img;
 	uint8_t				*buff_img;
 	uint8_t				*buff_fd[2];
